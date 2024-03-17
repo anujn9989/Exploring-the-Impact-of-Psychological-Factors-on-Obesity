@@ -14,6 +14,9 @@ Weight Stigma and Health-Seeking Behaviors: Highlighted the implications of weig
 * Logistic regression model accuracy: 81%
 * Significant relationships identified between self-perception accuracy and gender, relative fat mass, etc.
 
+![an image](images/sp_vs_features.png)
+
+![an image](images/accur_sp_vs_features.png)
 ## Conclusion:
 This project sheds light on the complex interplay between psychological factors and obesity, providing insights that could inform interventions aimed at promoting healthier lifestyles and reducing weight stigma.
 
