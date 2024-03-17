@@ -1,0 +1,410 @@
+---
+title: "Project1_Team5"
+output: 
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_float: true
+---
+
+```{r warning=FALSE, message=FALSE}
+library(tidyverse)
+library(knitr)
+library(caret)
+library(corrplot)
+library(dplyr)
+library(rpart)
+library(rpart.plot)
+library(ggplot2)
+library(cvms)
+library(janitor)
+load("tech_data.Rdata")
+```
+
+
+```{r}
+
+dataset = subset(tech_biom, select = c(SABDYMS, BDYMSQ04, EXLWTBC, SEX, BMISC, PHDCMWBC, PHDCMHBC, PHDKGWBC)) #extract initial variables of interest 
+
+dataset$EXLWTBC = as.numeric(as.character(dataset$EXLWTBC)) #fix class type of exercise as it was originally factor
+
+dataset1 = dataset[rowSums(is.na(dataset)) == 0,] #remove all rows with NA values 
+
+dataset1 = dataset1[dataset1$EXLWTBC != 9999, ] #remove placeholder values 
+dataset1 = dataset1[dataset1$EXLWTBC != 9996, ] #remove placeholder values 
+
+for (i in 1:nrow(dataset1)) {
+  if (dataset1$SEX[i] == 1) {
+    dataset1$RFM[i] = 64 - (20 * dataset1$PHDCMHBC[i] / dataset1$PHDCMWBC[i])
+  } 
+  else if (dataset1$SEX[i] == 2) {
+    dataset1$RFM[i] = 76 - (20 * dataset1$PHDCMHBC[i] / dataset1$PHDCMWBC[i])
+  }
+} #calculate RFM as needed
+
+for (i in 1:nrow(dataset1)) {
+  if (dataset1$SEX[i] == 1 && dataset1$RFM[i] < 2) {
+    dataset1$RFM_Category[i] = 1
+  } 
+  else if (dataset1$SEX[i] == 1 && dataset1$RFM[i] >= 2 && dataset1$RFM[i] < 5) {
+    dataset1$RFM_Category[i] = 2
+  }
+  else if (dataset1$SEX[i] == 1 && dataset1$RFM[i] >= 5 && dataset1$RFM[i] < 13) {
+    dataset1$RFM_Category[i] = 3
+  }
+  else if (dataset1$SEX[i] == 1 && dataset1$RFM[i] >= 13 && dataset1$RFM[i] < 17) {
+    dataset1$RFM_Category[i] = 4
+  }
+  else if (dataset1$SEX[i] == 1 && dataset1$RFM[i] >= 17 && dataset1$RFM[i] < 24) {
+    dataset1$RFM_Category[i] = 5
+  }
+  else if (dataset1$SEX[i] == 1 && dataset1$RFM[i] >= 25) {
+    dataset1$RFM_Category[i] = 6
+  }
+  else if (dataset1$SEX[i] == 2 && dataset1$RFM[i] < 10) {
+    dataset1$RFM_Category[i] = 1
+  }
+  else if (dataset1$SEX[i] == 2 && dataset1$RFM[i] >= 10 && dataset1$RFM[i] < 13) {
+    dataset1$RFM_Category[i] = 2
+  }
+  else if (dataset1$SEX[i] == 2 && dataset1$RFM[i] >= 13 && dataset1$RFM[i] < 20) {
+    dataset1$RFM_Category[i] = 3
+  }
+  else if (dataset1$SEX[i] == 2 && dataset1$RFM[i] >= 20 && dataset1$RFM[i] < 24) {
+    dataset1$RFM_Category[i] = 4
+  }
+  else if (dataset1$SEX[i] == 2 && dataset1$RFM[i] >= 24 && dataset1$RFM[i] < 31) {
+    dataset1$RFM_Category[i] = 5
+  }
+  else if (dataset1$SEX[i] == 2 && dataset1$RFM[i] >= 31) {
+    dataset1$RFM_Category[i] = 6
+  }
+} #calculate RFM categories as needed 
+
+dataset2 = subset(dataset1, dataset1$RFM > 0) #remove RFM<0 since that doesn't make sense (only 2 entries so it's okay regardless)
+
+dataset2$SABDYMS = droplevels(dataset2$SABDYMS) #remove unused levels 
+dataset2$BDYMSQ04 = droplevels(dataset2$BDYMSQ04) #remove unused levels 
+
+
+# recoding levels for intuitiveness and matching analysis
+recode = c("Non-Overweight SP" = 1, "Non-Overweight SP" = 2, "Overweight SP" = 3)
+dataset2$SABDYMS = factor(dataset2$SABDYMS, levels = recode, labels = names(recode)) 
+
+recode2 = c("Male" = 1, "Female" = 2)
+dataset2$SEX = factor(dataset2$SEX, levels = recode2, labels = names(recode2))
+
+recode3 = c("Diet" = 1, "Diet" = 2, "Diet" = 3, "No-Diet" = 5)
+dataset2$BDYMSQ04 = factor(dataset2$BDYMSQ04, levels = recode3, labels = names(recode3))
+
+recode4 = c("Non-Obese" = 1, "Non-Obese" = 2, "Non-Obese" = 3, "Non-Obese" = 4, "Non-Obese" = 5, "Obese" = 6)
+dataset2$RFM_Category = factor(dataset2$RFM_Category, levels = recode4, labels = names(recode4))
+dataset2$RFM_Category = droplevels(as.factor(dataset2$RFM_Category))
+
+# adding on accuracy of self-perception for later analysis (note this isn't used in step 1, only introduced until step 2)
+for (i in 1:nrow(dataset2)) {
+  if (dataset2$SABDYMS[i] == "Non-Overweight SP" && dataset2$RFM_Category[i] == "Non-Obese") {
+    dataset2$`Self-Perception`[i] = "Accurate SP"
+  } 
+  else if (dataset2$SABDYMS[i] == "Non-Overweight SP" && dataset2$RFM_Category[i] == "Obese") {
+    dataset2$`Self-Perception`[i] = "Inaccurate SP"
+  }
+  else if (dataset2$SABDYMS[i] == "Overweight SP" && dataset2$RFM_Category[i] == "Obese") {
+    dataset2$`Self-Perception`[i] = "Accurate SP"
+  }
+  else if (dataset2$SABDYMS[i] == "Overweight SP" && dataset2$RFM_Category[i] == "Non-Obese") {
+    dataset2$`Self-Perception`[i] = "Inaccurate SP"
+  }
+}
+dataset2$`Self-Perception` = as.factor(dataset2$`Self-Perception`) #changing from character to factor
+
+# cleaning up dataset to contain only variables of analysis
+dataset3 = subset(dataset2, select=c("Self-Perception", "SABDYMS", "SEX", "BDYMSQ04", "RFM", "PHDKGWBC", "EXLWTBC"))
+
+save(dataset3, file="group_biom_v3.Rdata")
+
+```
+# Aims of Analysis
+
+This STATS report stands as supplementary material underlying the analysis performed in our team’s main report, complete with code, methodology, and figures where applicable. In line with our research question of exploring the influences of accurate/inaccurate self-perception on lifestyle factors, our statistical approach can be summarised into two key stages:
+
+* Stage 1: Exploring the trends between individuals’ self-perceived weight status and other personal and lifestyle factors.
+
+  * The variable of interest here is self-perceived weight status, or SABDYMS, of which we use various types of models and exploratory analysis to look to evaluate broader relationships as suggested by intuition and literature.
+
+  * Analyses in this stage featured broader and more general evaluation with the main purpose of grasping trends and relationships between variables in order to guide more specific discussion in stage 2.
+
+  * Factor Analysis of Mixed Data (PCA-esque model, which from now, will be termed as PCA for convenience), Basic Logistic Regression, and PCA Logistic Regression was performed in this stage.
+
+* Stage 2: Exploring personal and lifestyle factor differences and trends between those individuals who perceived their own weight status correctly, and those who perceived their own weight status incorrectly.
+
+  * In this stage, we’ve created a new variable to represent the accurate or inaccurate self-perception of weight, named Self-Perception, which is the variable of interest here.
+
+  * Analyses in this stage is focused on evaluating actual explanatory power of each personal and lifestyle variable with the underlying goal of discovering marked differences that may cause an individual to self-perceive their weight accurately, as opposed to inaccurately.
+
+# Description of Data
+
+The data used throughout our analysis originates from the Australian Health Survey’s biomedical dataset from which we’ve extracted our respective variables of interest and cleaned. A summary has been tabulated below:
+
+```{r}
+variables = c(colnames(dataset3))
+variables_definitions = data.frame(Variables = variables, Definitions = c(
+  "Accuracy of Self-Perceived Weight Status", 
+  "Self-Perceived body mass / weight status", 
+  "Gender of person", 
+  "Whether currently on a diet", 
+  "Relative fat mass percentage as an indicator for obesity", 
+  "True measured weight in kilograms", 
+  "Total minutes of physical activity undertaken in past week"), 
+  Class = c("Factor", "Factor", "Factor", "Factor", "Numerical", "Numerical", "Numerical"), 
+  Levels = c("Accurate SP/Inaccurate SP", "Overweight SP/Non-Overweight SP", "Male/Female", "Diet/No-Diet", "Continuous", "Continuous", "Continuous"))
+variables_definitions[nrow(variables_definitions)+1,] = "" #spacing for report
+kable(variables_definitions, col.names = c("Variables", "Definitions", "Class", "Levels"), caption = "Fig 1: Summary table of variables and their definitions")
+```
+
+```{r}
+kable(head(dataset3), caption = "Fig 2: Snapshot of working dataset")
+```
+## Stage 2
+
+### Classification Tree
+
+Due to our variable of interest being qualitative we decided to use "Classification tree" to predict "Self-perception". Classification Trees used for predicting qualitative variables oppose to Decision Trees also predictor variables could be qualitative and quantitative.
+
+
+```{r}
+for (i in 1:nrow(dataset3)) {
+  if (dataset3$SEX[i] == "Male" && dataset3$RFM[i] < 2) {
+    dataset3$RFM_Category[i] = 0
+  } 
+  else if (dataset3$SEX[i] == "Male" && dataset3$RFM[i] >= 2 && dataset3$RFM[i] < 5) {
+    dataset3$RFM_Category[i] = 0
+  }
+  else if (dataset3$SEX[i] == "Male" && dataset3$RFM[i] >= 5 && dataset3$RFM[i] < 13) {
+    dataset3$RFM_Category[i] = 0
+  }
+  else if (dataset3$SEX[i] == "Male" && dataset3$RFM[i] >= 13 && dataset3$RFM[i] < 17) {
+    dataset3$RFM_Category[i] = 0
+  }
+  else if (dataset3$SEX[i] == "Male" && dataset3$RFM[i] >= 17 && dataset3$RFM[i] < 24) {
+    dataset3$RFM_Category[i] = 0
+  }
+  else if (dataset3$SEX[i] == "Male" && dataset3$RFM[i] >= 25) {
+    dataset3$RFM_Category[i] = 1
+  }
+  else if (dataset3$SEX[i] == "Female" && dataset3$RFM[i] < 10) {
+    dataset3$RFM_Category[i] = 0
+  }
+  else if (dataset3$SEX[i] == "Female" && dataset3$RFM[i] >= 10 && dataset3$RFM[i] < 13) {
+    dataset3$RFM_Category[i] = 0
+  }
+  else if (dataset3$SEX[i] == "Female" && dataset3$RFM[i] >= 13 && dataset3$RFM[i] < 20) {
+    dataset3$RFM_Category[i] = 0
+  }
+  else if (dataset3$SEX[i] == "Female" && dataset3$RFM[i] >= 20 && dataset3$RFM[i] < 24) {
+    dataset3$RFM_Category[i] = 0
+  }
+  else if (dataset3$SEX[i] == "Female" && dataset3$RFM[i] >= 24 && dataset3$RFM[i] < 31) {
+    dataset3$RFM_Category[i] = 0
+  }
+  else if (dataset3$SEX[i] == "Female" && dataset3$RFM[i] >= 31) {
+    dataset3$RFM_Category[i] = 1
+  }
+}
+
+recode3 = c("Obese" = 1, "Non-Obese" = 0)
+dataset3$RFM_Category = factor(dataset3$RFM_Category, levels = recode3, labels = names(recode3))
+```
+
+
+
+```{r}
+df = dataset3
+
+df$"Self-Perception" = as.factor(df$"Self-Perception")
+df$"RFM_Category" = as.factor(df$"RFM_Category")
+names(df)[1] <- "SELFPERC"
+summary(df)
+```
+
+
+
+#### Tabulation of data
+Differences in gender for self-perception 
+Differences in RFM categories for self-perception 
+Differences in diet for self-perception 
+
+Differences in gender for accurate/inaccutate SP 
+Differences in RFM categories for accurate/inaccurate SP 
+Differences in diet for accurate/inaccurate SP
+
+```{r results="asis"}
+library(arsenal)
+require(survival)
+tab1 <- tableby(SABDYMS ~ SEX + RFM_Category + BDYMSQ04, data=df)
+summary(tab1)
+tab2 <- tableby(SELFPERC ~ SEX + RFM_Category + BDYMSQ04, data=df)
+summary(tab2)
+
+```
+
+
+Splitting data into training and test set with 70/30, 70 percent of the data to train the model and 30 percent to make predictions.
+
+```{r}
+df = subset(df, select = -c(SABDYMS, RFM_Category) )
+set.seed(2021)
+dt = sort(sample(nrow(df), nrow(df)*.7))
+train1<-df[dt,]
+test1<-df[-dt,] 
+
+```
+
+#### Cross-Validation:
+Smaller Complexity Parameter (cp) gives accurate tree with less X-val Relative Error.
+
+```{r fig.cap = "Fig 19: Cross-Validation result graph"}
+res1 <- rpart(SELFPERC~.,data=train1,
+              parms = list(split="information"))
+plotcp(res1, upper = "size")
+```
+
+Complexity Parameter table:
+
+```{r setup, include=FALSE}
+tab1 <- printcp(res1)
+```
+```{r}
+knitr::kable(tab1, caption = "Fig 20: Table of Complexity Parameter")
+```
+
+#### Classification Tree:
+The variables actually used for the tree are PHDKGWBC ~ Actual Weight, SEX, RFM ~ Relative Fat Mass, the number of observations in each node is displayed along. 
+
+```{r ig.cap = "Fig 20: Classification Tree"}
+split.fun <- function(x, labs, digits, varlen, faclen)
+{
+    labs   <- sub("PHDKGWBC",   "Actual Weight", labs)
+    labs   <- sub("RFM",      "Relative Fat Mass", labs)
+    labs
+}
+rpart.plot(res1, extra = 1, split.fun = split.fun, main = "Classification tree: Accurate vs Inaccurate self-perception")
+```
+
+The Predicted tree suggests that majority (3229) observations fell into accurate "Self-Perception" category. Whereas 2168 observations classified as inaccurate "Self-Perception". RFM more than 40 and Actual Weight between 70 - 85 -> inaccurate, FEMALE who has RFM between 31 - 40 and Actual Weight of less than 72 -> inaccurate, MALE who has RFM between 24-40 and Actual Weight less than 85 -> inaccurate. 
+
+Setting Complexity Parameter to zero to get full tree without performing pruning using cp.
+
+```{r fig.cap = "Fig 21: Cross-Validation result graph for full tree"}
+rpart_cont <- rpart.control(cp = 0)
+res2 <- rpart(SELFPERC~.,data=train1,
+              control = rpart_cont,
+              parms = list(split="information"))
+plotcp(res2)
+```
+
+
+
+The below table suggests optimal split has 18 terminal nodes at Complexity Parameter of 0.0018 with the smallest xerror 0.49.
+
+```{r}
+tb <- data.frame(res2$cptable)
+knitr::kable(tb, caption = "Fig 22: Table of Complexity Parameter of Full Tree")
+```
+
+Using information below we get full tree. 
+
+```{r warning=FALSE, message=FALSE, fig.cap = "Fig 23: Full Classification Tree graph"}
+res3 <- prune.rpart(res2, cp = 0.0018)
+rpart.plot(res3,type=4,extra=1, main="Full Classification tree",cex=0.3)
+```
+
+#### Caret Package: Cross-Validation
+
+We Performed 10 repeated 10-fold Cross-validation to determine Complexity Paremeter that maximizes Accuracy of the Tree prediction.
+
+```{r}
+n_grid <- 100
+tuneGrid <- expand.grid(cp = seq(0.01, 0.001, length=n_grid))
+res4 <- train(
+  SELFPERC ~ .,
+  data = train1,
+  method = "rpart",
+  trControl = trainControl(method = "repeatedcv",
+                           number = 10,
+                           repeats = 10),
+  tuneGrid = tuneGrid)
+ggplot(res4) +  theme_bw() + labs(title = "Cross-Validation using Caret", caption = "Fig 24: Cross Validation result graph")
+```
+
+We want the cp value of the smallest tree that has the smallest cross validation error. 
+The CV optimal value of cp is 0.01.
+
+```{r}
+min_val <- which.min(res4$results$Accuracy)
+opt_cv  <- res4$results$cp[min_val]
+opt_cv
+```
+
+#### Classification Tree:
+
+Based on the Gini Index the variables that give best split were: RFM, PHDKGWBC (True weight), and SEX. The Caret gives same tree as above raprt function.
+
+```{r fig.cap = "Fig 25: Final Classification Tree"}
+res5 <- prune.rpart(res2, cp = opt_cv)
+split.fun <- function(x, labs, digits, varlen, faclen)
+{
+    labs   <- sub("PHDKGWBC",   "Actual Weight", labs)
+    labs   <- sub("RFM",      "Relative Fat Mass", labs)
+    labs
+}
+rpart.plot(res5,type=4,extra=1, main="Classification Tree: Accurate vs Inaccurate Self-Perception",cex=0.5, split.fun = split.fun)
+```
+#### Confussion Matrix: 
+
+```{r warning=FALSE, message=FALSE, fig.cap = "Fig 26: Confusion Matrix of Training set"}
+cfm = confusionMatrix(train1$SELFPERC,
+                predict(res5,
+                        newdata=train1,
+                        type="class"))
+
+cfm1 <- as_tibble(cfm$table)
+plot_confusion_matrix(cfm1, 
+                      target_col = "Reference", 
+                      prediction_col = "Prediction",
+                      counts_col = "n")
+```
+
+Accuracy: 
+
+```{r}
+confusionMatrix(train1$SELFPERC,
+                predict(res5,
+                        newdata=train1,
+                        type="class"))$overall[1]
+```
+
+#### Test vs Train set model
+
+Comparing test and train set with increasing size of tree along with value of error.
+
+```{r echo=FALSE, warning=FALSE}
+# Decide on best model
+heart_bigrp <- rpart(SELFPERC~., data=train1, control=rpart.control(minsplit=6, cp=0.005))
+tr_err <- 1-confusionMatrix(factor(train1$SELFPERC), predict(heart_bigrp, newdata=train1, type="class"))$overall[1]
+ts_err <- 1-confusionMatrix(factor(test1$SELFPERC), predict(heart_bigrp, newdata=test1, type="class"))$overall[1]
+nnodes <- max(heart_bigrp$cptable[,2])+1
+cp <- c(0.006, 0.007, 0.008, 0.009, 0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.5)
+for (i in 1:length(cp)) {
+  heart_rp <- rpart(SELFPERC~., data=train1, control=rpart.control(minsplit=6, cp=cp[i]))
+  tr_err <- c(tr_err, 1-confusionMatrix(train1$SELFPERC, predict(heart_rp, newdata=train1, type="class"))$overall[1])
+  ts_err <- c(ts_err, 1-confusionMatrix(test1$SELFPERC, predict(heart_rp, newdata=test1, type="class"))$overall[1])
+  nnodes <- c(nnodes, max(heart_rp$cptable[,2])+1)
+}
+heart_fit <- tibble(cp=c(0.005, cp), nnodes, train=tr_err, test=ts_err) %>% 
+  gather(type, error, train, test) 
+ggplot(heart_fit, aes(x=nnodes, y=error, colour=type)) + 
+  geom_line() + scale_colour_brewer("", palette="Dark2") +
+  xlab("Size of tree") +
+  theme_bw() + labs(title = "Model Comparison Graph", caption = "Fig 27: Comparison of Train and Test set graph")
+```

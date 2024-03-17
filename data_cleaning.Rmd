@@ -1,0 +1,164 @@
+---
+title: "Data Cleaning"
+output:
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_float: true
+name: "Anujin Munkhbayar"
+---
+
+```{r warning=FALSE, message=FALSE}
+library(tidyverse)
+library(naniar)
+library(knitr)
+library("reshape2")
+library(devtools)
+library(DT)
+library(janitor)
+library(caret)
+library(sjmisc)
+library(Routliers)
+library(resample)
+#loading data from Rdata
+load("tech_data.Rdata")
+#only selecting data that will be used in the future
+new_data <- tech_biom %>%
+  dplyr::select(c(1:54))
+# converting some variables that were categorized as factor to numeric 
+new_data$EXLWTBC <- as.integer(as.numeric(as.character(new_data$EXLWTBC)))
+new_data$EXLWMBC <- as.integer(as.numeric(as.character(new_data$EXLWMBC)))
+new_data$EXLWVBC <-  as.integer(as.numeric(as.character(new_data$EXLWVBC)))
+#making sure the values have right decimal point
+new_data$BMISC <- round(new_data$BMISC, 2)
+new_data$PHDKGWBC <- round(new_data$PHDKGWBC, 1)
+new_data$PHDCMHBC <- round(new_data$PHDCMHBC, 1)
+new_data$PHDCMWBC <- round(new_data$PHDCMWBC, 1)
+#omitting missing values 
+#Not applicable and Not used answers for some questions have not been identified as missing values, made some changes to John's code
+clean_data1 = dplyr::select(new_data, -GGTNTR)
+clean_data <- na.omit(clean_data1)
+#selecting variables with only numeric type for future analysis such a variance calculation 
+data_num2 <- select_if(clean_data, is.numeric)             
+#producing table of missing value summary
+miss_pect <- miss_var_summary(new_data)
+miss_pect$pct_miss <- round(miss_pect$pct_miss, 1)
+#selecting variables with only numeric type for future analysis such a outlier detection
+clean_data1 <- na.omit(new_data)
+data_num <- select_if(clean_data, is.numeric) 
+#outlier detection process
+tib <- as_tibble(data_num) 
+is_outlier <- function(x) { return(x%in%boxplot(x, plot = FALSE)$out); }
+out_name <- function(x) { return(paste0("out_",x)); }
+tib_out  <- tib %>% mutate_all(.funs = is_outlier) %>%rename_with(.fn=out_name)
+tib4 = tib_out %>% filter(rowSums(tib_out) >= 1)
+out_count = colSums(tib4)
+var_x1<-as.data.frame(t(out_count))
+var_x2<-as.data.frame(t(var_x1))
+percent = var_x2$V1/6762 *100
+var_x2$percent = percent
+var_x2$percent <- round(var_x2$percent, 1)
+var_x2 = rename(var_x2, num_outliers = V1)
+#complete data size
+clean_biom = dplyr::select(clean_data, -c(BIORESPC, EXLWMBC))
+dim = dim(clean_biom)
+x = c("rows", "columns")
+table1 <- data.frame( x, dim)
+```
+
+# Executive Summary
+The data set had 2 low variance variables such as BIORESPC and EXLWMBC. In addition to this there were some inconsistencies with data dictionary: EXLWTBC, EXLWMBC, EXLWVBC variables had value 9996 and GGTNTR variable had value 0 which were not specified in the data dictionary. SF2SA1QN was recorded from 1 to 5 only but should be 1 to 10, DIETQ5 was not specific enough about the type of vegetables and serving size. There was only 4.2% missing values compared to whole dataset. In terms of outlier detection boxplot method was used and in each variables there were 2,623 unique values that has outliers in at least 1 variable, and the variables with the most outliers were EXLWMBC, EXLWVBC, EXLWTBC with 1166, 1161, and 380 outliers respectively. AGEC variable had no outliers. 
+For major project, categorical variables with less missing values and not constant, as well as numeric variables with less outliers and has reasonable variance could be used. These include categorcal variables such as TRIGNTR, TRIGRESB, SMSBC, COBBC, FEMLSBC, SF2SA1QN, DIABBC, HCHOLBC, HSUGBC, HYPBC, DIETQ5, DIETQ8, DIETRDI, SEX, SMKDAILY, SMKSTAT, FASTSTAD, GLUCFPD, GLUCFREB and numeric variables such as PHDCMHBC, AGEC, BMISC, SYSTOL, SLPTIME, PHDKGWBC, ADTOTSE, DIASTOL, PHDCMWBC. 
+The complete data set has 6762 rows and 51 columns.
+
+### **Outliers summary**
+
+```{r}
+datatable(var_x2)
+```
+
+### **Missing Values summary**
+
+```{r}
+datatable(miss_pect)
+```
+
+```{r}
+datatable(table1)
+```
+
+# Exploratory Data Analysis
+
+Categorical variable BIORESPC was detected as constant variable and numeric variable EXLWMBC was identified as near zero variance variable, both have been removed from the techinically correct data. Some inconsistencies with data dictionary were EXLWTBC - Total mins undertaken physical activity in last week, EXLWMBC - Total mins undertaken moderate physical activity in last week, EXLWVBC - Total mins undertaken vigorous physical activity in last week had value 9996 and it has not been identified in data dictionary, it might have been Not applicable category, SF2SA1QN - SEIFA - Index of Relative Socio-Economic Disadvantage data was recorded from 1 to 5 only, however in data dictionary it states from 1 to 10, data dictionary might need to be updated, DIETQ5 - Usual daily serves of vegetables was not specific enough about the type of vegetables and serving size, GGTNTR - Gamma glutamyl transferase (GGT) status (U/L) variable had value 0 which was not specified in dictionary. Only 4.2 % missingness was found from entire dataset, specifically GGTNTR (Gamma glutamyl transferase (GGT) status (U/L)) varaible had 66.7% missing values, followed by DIASTOL (Diastolic blood pressure (mmHg)) and SYSTOL (Systolic blood pressure (mmHg)) 23% each. Out of 54 variable 29 of them had 1 or more missing values. Outlier detection was conducted only for numeric variables and boxplot was used to identify outliers in each variables there were 1228 unique rows that had outliers for at least 1 variable, and the variables with the most outliers were EXLWMBC, EXLWVBC, EXLWTBC with 594, 530, and 153 outliers respectively. AGEC variable had no outliers. 
+
+# Outliers
+
+```{r}
+ boxplot(data_num)
+```
+
+# Missing Values
+
+```{r}
+vis_miss(new_data) +
+theme(axis.text.x = element_text(size = 6, angle = 60))
+```
+```{r}
+gg_miss_var(new_data ,show_pct = TRUE)
+```
+
+### **Analysis:**
+
+As we can see from the graph above the variable with the most missing values was GGTNTR (Gamma glutamyl transferase (GGT) status (U/L)), followed by DIASTOL Diastolic blood pressure (mmHg) and SYSTOL Systolic blood pressure (mmHg). These variables represented information that not many individuals are aware of. For this reason it have been answered as "Not measured", and "Not reported". Incomplete variables like this could not represent whole population these should be removed from the dataset, thus GGTNTR was ommitted from dataset. 
+
+# Clean Version of Data
+
+```{r}
+var <- colVars(data_num2)
+var1<-as.data.frame(t(var))
+var2<-as.data.frame(t(var1))
+var2 = rename(var2, Variance = V1)
+var2$Variance <- round(var2$Variance, 1)
+datatable(var2)
+```
+```{r}
+betterAgain <- clean_data %>% remove_constant()
+```
+```{r}
+data_num4 = select_if(betterAgain, is.numeric)
+
+if (length(nearZeroVar(data_num4)) > 0) {
+  data_num4 <- data_num4[, -nearZeroVar(data_num4)] 
+}
+```
+```{r warning = FALSE}
+datatable(clean_biom)
+save(clean_biom,
+     file = "clean_data.Rdata")
+```
+# Reference:
+
+1. Tierney, N., 2021. Gallery of Missing Data Visualisations. [online] Cran.r-project.org. Available at: <https://cran.r-project.org/web/packages/naniar/vignettes/naniar-visualisation.html> [Accessed 10 September 2021].
+
+2. Programmingr.com. 2021. [online] Available at: <https://www.programmingr.com/examples/remove-na-rows-in-r/> [Accessed 10 September 2021].
+
+3. Dplyr.tidyverse.org. 2021. Rename columns — rename. [online] Available at: <https://dplyr.tidyverse.org/reference/rename.html> [Accessed 10 September 2021].
+
+4. Marsja, E., 2021. How to Remove a Column in R using dplyr (by name and index). [online] Available at: <https://www.marsja.se/how-to-remove-a-column-in-r-using-dplyr-by-name-and-index/> [Accessed 10 September 2021].
+
+5. Rdocumentation.org. 2021. nearZeroVar function - RDocumentation. [online] Available at: <https://www.rdocumentation.org/packages/caret/versions/6.0-88/topics/nearZeroVar> [Accessed 10 September 2021].
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
